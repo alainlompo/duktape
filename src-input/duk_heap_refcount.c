@@ -348,7 +348,7 @@ DUK_INTERNAL void duk_refzero_free_pending(duk_hthread *thr) {
 		DUK_HEAPHDR_PREINC_REFCOUNT(h1);  /* bump refcount to prevent refzero during finalizer processing */
 		DUK_ASSERT(DUK_HEAPHDR_GET_REFCOUNT(h1) != 0);  /* No wrapping; always true because initial refcount was 0. */
 		duk__refcount_run_torture_finalizer(thr, obj);  /* must never longjmp */
-		DUK_HEAPHDR_PREDEC_REFCOUNT(h1);  /* remove artificial bump */
+		DUK_HEAPHDR_PREDEC_REFCOUNT(thr, h1);  /* remove artificial bump */
 		DUK_ASSERT_DISABLE(h1->h_refcount >= 0);  /* refcount is unsigned, so always true */
 #endif  /* DUK_USE_REFZERO_FINALIZER_TORTURE */
 #endif  /* DUK_USE_FINALIZER_SUPPORT */
@@ -377,6 +377,7 @@ DUK_INTERNAL void duk_refzero_free_pending(duk_hthread *thr) {
 			DUK_DDD(DUK_DDDPRINT("object has a finalizer, run it"));
 
 			DUK_ASSERT(DUK_HEAPHDR_GET_REFCOUNT(h1) == 0);
+			DUK_ASSERT(DUK_HEAPHDR_NEEDS_REFCOUNT_UPDATE(h1));  /* never here with ROM objects */
 			DUK_HEAPHDR_PREINC_REFCOUNT(h1);  /* bump refcount to prevent refzero during finalizer processing */
 			DUK_ASSERT(DUK_HEAPHDR_GET_REFCOUNT(h1) != 0);  /* No wrapping; always true because initial refcount was 0. */
 
