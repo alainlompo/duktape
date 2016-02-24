@@ -2478,6 +2478,10 @@ Planned
   mark-and-sweep and assert for matching refcounts for objects surviving
   the sweep phase (GH-1406)
 
+* Add experimental support for mapping Ecmascript function 'data' area into a
+  user provided external buffer on-the-fly which is useful on some low memory
+  targets (GH-FIXME)
+
 * Fix a garbage collection bug where a finalizer triggered by mark-and-sweep
   could cause a recursive entry into mark-and-sweep (leading to memory unsafe
   behavior) if the voluntary GC trigger counter dropped to zero during
