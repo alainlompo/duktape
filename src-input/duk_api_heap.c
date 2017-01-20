@@ -89,12 +89,25 @@ DUK_EXTERNAL void duk_suspend(duk_context *ctx, duk_thread_state *state) {
 	DUK_ASSERT(thr->heap != NULL);
 	DUK_ASSERT(state != NULL);  /* unvalidated */
 
+	/* Currently not supported when called from within a finalizer.
+	 * If that is done, the finalizer will remain running indefinitely,
+	 * preventing other finalizers from executing.  The assert is a bit
+	 * wider, checking that it would be OK to run pending finalizers.
+	 */
+	DUK_ASSERT(thr->heap->pf_prevent_count == 0);
+
+	/* Currently not supported to duk_suspend() from an errCreate()
+	 * call.
+	 */
+	DUK_ASSERT(thr->heap->handling_error == 0);
+
 	heap = thr->heap;
 	lj = &heap->lj;
 
 	duk_push_tval(ctx, &lj->value1);
 	duk_push_tval(ctx, &lj->value2);
 
+	/* XXX: handling_error == 0 is asserted above, so no need to store. */
 	DUK_MEMCPY((void *) &snapshot->lj, (const void *) lj, sizeof(duk_ljstate));
 	snapshot->handling_error = heap->handling_error;
 	snapshot->curr_thread = heap->curr_thread;
@@ -118,6 +131,12 @@ DUK_EXTERNAL void duk_resume(duk_context *ctx, const duk_thread_state *state) {
 	DUK_ASSERT(thr != NULL);
 	DUK_ASSERT(thr->heap != NULL);
 	DUK_ASSERT(state != NULL);  /* unvalidated */
+
+	/* Shouldn't be necessary if duk_suspend() is called before
+	 * duk_resume(), but assert in case API sequence is incorrect.
+	 */
+	DUK_ASSERT(thr->heap->pf_prevent_count == 0);
+	DUK_ASSERT(thr->heap->handling_error == 0);
 
 	heap = thr->heap;
 

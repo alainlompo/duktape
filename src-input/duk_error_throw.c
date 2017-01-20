@@ -56,24 +56,20 @@ DUK_INTERNAL void duk_err_create_and_throw(duk_hthread *thr, duk_errcode_t code)
 	 */
 
 	if (DUK_UNLIKELY(double_error)) {
+		duk_tval tv_val;
 		duk_hobject *h_err;
-		duk_tval *tv_dst;
-
-		thr->heap->lj.type = DUK_LJ_TYPE_THROW;
-
-		tv_dst = &thr->heap->lj.value1;
-		DUK_TVAL_DECREF_NORZ(thr, tv_dst);  /* XXX: shouldn't be necessary without side effects */
 
 		h_err = thr->builtins[DUK_BIDX_DOUBLE_ERROR];
 		if (h_err != NULL) {
 			DUK_D(DUK_DPRINT("double fault detected -> use built-in fixed 'double error' instance"));
-			DUK_TVAL_SET_OBJECT(tv_dst, h_err);
-			DUK_HOBJECT_INCREF(thr, h_err);
+			DUK_TVAL_SET_OBJECT(&tv_val, h_err);
 		} else {
 			DUK_D(DUK_DPRINT("double fault detected; there is no built-in fixed 'double error' instance "
 			                 "-> use the error code as a number"));
-			DUK_TVAL_SET_I32(tv_dst, (duk_int32_t) code);
+			DUK_TVAL_SET_I32(&tv_val, (duk_int32_t) code);
 		}
+
+		duk_err_setup_ljstate1(thr, DUK_LJ_TYPE_THROW, &tv_val);
 
 		DUK_D(DUK_DPRINT("double error: skip throw augmenting to avoid further trouble"));
 	} else {
@@ -116,7 +112,10 @@ DUK_INTERNAL void duk_err_create_and_throw(duk_hthread *thr, duk_errcode_t code)
 		duk_err_augment_error_throw(thr);
 #endif
 
-		duk_err_setup_heap_ljstate(thr, DUK_LJ_TYPE_THROW);
+		duk_err_setup_ljstate1(thr, DUK_LJ_TYPE_THROW, DUK_GET_TVAL_NEGIDX(ctx, -1));
+#if defined(DUK_USE_DEBUGGER_SUPPORT)
+		duk_err_check_debugger_integration(thr);
+#endif
 	}
 
 	thr->callstack_max = DUK_CALLSTACK_DEFAULT_MAX;  /* reset callstack limit */
@@ -125,7 +124,7 @@ DUK_INTERNAL void duk_err_create_and_throw(duk_hthread *thr, duk_errcode_t code)
 	 *  Finally, longjmp
 	 */
 
-	thr->heap->handling_error = 0;
+	thr->heap->handling_error = 0;  /* XXX: reduce scope? */
 
 	DUK_DDD(DUK_DDDPRINT("THROW ERROR (INTERNAL): %!iT, %!iT (after throw augment)",
 	                     (duk_tval *) &thr->heap->lj.value1, (duk_tval *) &thr->heap->lj.value2));

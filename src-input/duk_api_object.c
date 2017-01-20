@@ -721,6 +721,8 @@ DUK_EXTERNAL void duk_set_finalizer(duk_context *ctx, duk_idx_t idx) {
 	callable = duk_is_callable(ctx, -1);
 	duk_put_prop_stridx(ctx, idx, DUK_STRIDX_INT_FINALIZER);
 
+	/* XXX: Proxy impact here? */
+
 	/* In addition to setting the finalizer property, keep a "have
 	 * finalizer" flag in duk_hobject in sync so that refzero can do
 	 * a very quick finalizer check by walking the prototype chain

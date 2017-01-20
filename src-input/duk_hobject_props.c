@@ -522,10 +522,10 @@ DUK_LOCAL duk_bool_t duk__proxy_check_prop(duk_hthread *thr, duk_hobject *obj, d
  *  reachable for GC at all times; valstack is used for that now.
  *
  *  Also, a GC triggered during this reallocation process must not interfere
- *  with the object being resized.  This is currently controlled by using
- *  heap->mark_and_sweep_base_flags to indicate that no finalizers will be
- *  executed (as they can affect ANY object) and no objects are compacted
- *  (it would suffice to protect this particular object only, though).
+ *  with the object being resized.  This is currently controlled by preventing
+ *  finalizers (as they may affect ANY object) and object compaction in
+ *  mark-and-sweep.  It would suffice to protect only this particular object
+ *  from compaction, however.
  *
  *  Note: a non-checked variant would be nice but is a bit tricky to
  *  implement for the array abandonment process.  It's easy for
@@ -543,7 +543,7 @@ DUK_INTERNAL void duk_hobject_realloc_props(duk_hthread *thr,
                                             duk_uint32_t new_h_size,
                                             duk_bool_t abandon_array) {
 	duk_context *ctx = (duk_context *) thr;
-	duk_small_uint_t prev_mark_and_sweep_base_flags;
+	duk_small_uint_t prev_ms_base_flags;
 	duk_uint32_t new_alloc_size;
 	duk_uint32_t new_e_size_adjusted;
 	duk_uint8_t *new_p;
@@ -642,17 +642,20 @@ DUK_INTERNAL void duk_hobject_realloc_props(duk_hthread *thr,
 	 *  valstack for reachability.  The actual buffer is then detached at
 	 *  the end.
 	 *
-	 *  Note: heap_mark_and_sweep_base_flags are altered here to ensure
-	 *  no-one touches this object while we're resizing and rehashing it.
-	 *  The flags must be reset on every exit path after it.  Finalizers
-	 *  and compaction is prevented currently for all objects while it
-	 *  would be enough to restrict it only for the current object.
+	 *  It's critical to avoid this object from being resized by a side
+	 *  effect.  This is achieved by preventing finalizers (which may
+	 *  operate on any object arbitrarily) and mark-and-sweep object
+	 *  compaction.  Other than that DECREF cascades and mark-and-sweep
+	 *  are OK.  It would be enough to prevent this particular object from
+	 *  being resized (maybe via a duk_hobject flag) but compaction is
+	 *  prevented for all objects now.
 	 */
 
-	prev_mark_and_sweep_base_flags = thr->heap->mark_and_sweep_base_flags;
-	thr->heap->mark_and_sweep_base_flags |=
-	        DUK_MS_FLAG_NO_FINALIZERS |         /* avoid attempts to add/remove object keys */
-	        DUK_MS_FLAG_NO_OBJECT_COMPACTION;   /* avoid attempt to compact the current object */
+	prev_ms_base_flags = thr->heap->ms_base_flags;
+	thr->heap->ms_base_flags |=
+	        DUK_MS_FLAG_NO_OBJECT_COMPACTION;      /* Avoid attempt to compact the current object (all objects really). */
+	thr->heap->pf_prevent_count++;                 /* Avoid finalizers. */
+	DUK_ASSERT(thr->heap->pf_prevent_count != 0);  /* Wrap. */
 
 	new_alloc_size = DUK_HOBJECT_P_COMPUTE_SIZE(new_e_size_adjusted, new_a_size, new_h_size);
 	DUK_DDD(DUK_DDDPRINT("new hobject allocation size is %ld", (long) new_alloc_size));
@@ -663,16 +666,14 @@ DUK_INTERNAL void duk_hobject_realloc_props(duk_hthread *thr,
 		DUK_ASSERT(new_h_size == 0);
 		new_p = NULL;
 	} else {
-		/* This may trigger mark-and-sweep with arbitrary side effects,
-		 * including an attempted resize of the object we're resizing,
-		 * executing a finalizer which may add or remove properties of
-		 * the object we're resizing etc.
-		 */
-
-		/* Note: buffer is dynamic so that we can 'steal' the actual
+		/* This allocation may trigger side effects; harmful ones are
+		 * prevented above.
+		 *
+		 * Buffer is dynamic so that we can 'steal' the actual
 		 * allocation later.
 		 */
 
+		/* XXX: out-of-memory handling incorrect */
 		new_p = (duk_uint8_t *) duk_push_dynamic_buffer(ctx, new_alloc_size);  /* errors out if out of memory */
 		DUK_ASSERT(new_p != NULL);  /* since new_alloc_size > 0 */
 	}
@@ -954,7 +955,9 @@ DUK_INTERNAL void duk_hobject_realloc_props(duk_hthread *thr,
 
 	DUK_DDD(DUK_DDDPRINT("resize result: %!O", (duk_heaphdr *) obj));
 
-	thr->heap->mark_and_sweep_base_flags = prev_mark_and_sweep_base_flags;
+	DUK_ASSERT(thr->heap->pf_prevent_count > 0);
+	thr->heap->pf_prevent_count--;
+	thr->heap->ms_base_flags = prev_ms_base_flags;
 
 	/*
 	 *  Post resize assertions.
@@ -976,7 +979,8 @@ DUK_INTERNAL void duk_hobject_realloc_props(duk_hthread *thr,
  abandon_error:
 	DUK_D(DUK_DPRINT("hobject resize failed during abandon array, decref keys"));
 
-	thr->heap->mark_and_sweep_base_flags = prev_mark_and_sweep_base_flags;
+	thr->heap->pf_prevent_count--;
+	thr->heap->ms_base_flags = prev_ms_base_flags;
 
 	DUK_ERROR_ALLOC_FAILED(thr);
 }
@@ -4796,12 +4800,14 @@ DUK_INTERNAL duk_size_t duk_hobject_get_length(duk_hthread *thr, duk_hobject *ob
  *  in sync with the actual property when setting/removing the finalizer.
  */
 
-DUK_INTERNAL duk_bool_t duk_hobject_has_finalizer_fast(duk_hthread *thr, duk_hobject *obj) {
+#if defined(DUK_USE_HEAPPTR16)
+DUK_INTERNAL duk_bool_t duk_hobject_has_finalizer_fast_raw(duk_heap *heap, duk_hobject *obj) {
+#else
+DUK_INTERNAL duk_bool_t duk_hobject_has_finalizer_fast_raw(duk_hobject *obj) {
+#endif
 	duk_uint_t sanity;
 
-	DUK_ASSERT(thr != NULL);
 	DUK_ASSERT(obj != NULL);
-	DUK_UNREF(thr);
 
 	sanity = DUK_HOBJECT_PROTOTYPE_CHAIN_SANITY;
 	do {
@@ -4812,7 +4818,12 @@ DUK_INTERNAL duk_bool_t duk_hobject_has_finalizer_fast(duk_hthread *thr, duk_hob
 			DUK_D(DUK_DPRINT("prototype loop when checking for finalizer existence; returning false"));
 			return 0;
 		}
-		obj = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, obj);
+#if defined(DUK_USE_HEAPPTR16)
+		DUK_ASSERT(heap != NULL);
+		obj = DUK_HOBJECT_GET_PROTOTYPE(heap, obj);
+#else
+		obj = DUK_HOBJECT_GET_PROTOTYPE(NULL, obj);  /* 'heap' arg ignored */
+#endif
 	} while (obj != NULL);
 
 	return 0;
