@@ -2570,6 +2570,9 @@ Planned
   necessary because all free operations decrement the voluntary GC counter and
   all allocs/reallocs check for voluntary GC (GH-1355)
 
+* Remove voluntary GC trigger counter decrement from memory free calls
+  (GH-1427)
+
 * Use a 32-bit refcount field by default (even on 64-bit systems) which saves
   8 bytes for each heap object and can only wrap if the Duktape heap is
   larger than 64GB; disable DUK_USE_REFCOUNT32 to use size_t for refcounts
